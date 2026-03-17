@@ -1,9 +1,11 @@
 package yamlinline
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 
 	"github.com/goccy/go-yaml/ast"
@@ -12,9 +14,16 @@ import (
 
 const includeTag = "!include"
 
+var utf8BOM = []byte{0xEF, 0xBB, 0xBF}
+
+var (
+	includeDoubleQuotedPathPattern = regexp.MustCompile(`(!include[ \t]+)"([^\r\n"]*?)"`)
+	includeSingleQuotedPathPattern = regexp.MustCompile(`(!include[ \t]+)'([^\r\n']*?)'`)
+)
+
 // InlineYAML expands whole-node !include tags and returns normalized YAML bytes.
 func InlineYAML(src []byte) ([]byte, error) {
-	file, err := parser.ParseBytes(src, 0)
+	file, err := parseYAML(src)
 	if err != nil {
 		return nil, fmt.Errorf("parse YAML: %w", err)
 	}
@@ -160,7 +169,7 @@ func (r *includeResolver) resolveInclude(tag *ast.TagNode) (ast.Node, error) {
 		return nil, r.includeError(tag, resolvedPath, chain, fmt.Errorf("read included file: %w", err))
 	}
 
-	file, err := parser.ParseBytes(src, 0)
+	file, err := parseYAML(src)
 	if err != nil {
 		return nil, r.includeError(tag, resolvedPath, chain, fmt.Errorf("parse included YAML: %w", err))
 	}
@@ -194,23 +203,9 @@ func includePath(tag *ast.TagNode) (string, error) {
 		if value.Value == nil {
 			return "", fmt.Errorf("include path must be a scalar value")
 		}
-		path := strings.TrimSpace(value.Value.Value)
-		if path == "" {
-			return "", fmt.Errorf("include path cannot be empty")
-		}
-		if strings.ContainsAny(path, "\r\n") {
-			return "", fmt.Errorf("include path must be a single line")
-		}
-		return path, nil
+		return normalizeIncludePath(value.Value.Value)
 	case ast.ScalarNode:
-		path := value.GetToken().Value
-		if path == "" {
-			return "", fmt.Errorf("include path cannot be empty")
-		}
-		if strings.ContainsAny(path, "\r\n") {
-			return "", fmt.Errorf("include path must be a single line")
-		}
-		return path, nil
+		return normalizeIncludePath(value.GetToken().Value)
 	default:
 		return "", fmt.Errorf("include path must be a scalar value, got %s", tag.Value.Type())
 	}
@@ -294,7 +289,7 @@ func nodePosition(node ast.Node) string {
 }
 
 func newNullNode() (ast.Node, error) {
-	file, err := parser.ParseBytes([]byte("null\n"), 0)
+	file, err := parseYAML([]byte("null\n"))
 	if err != nil {
 		return nil, fmt.Errorf("create null node: %w", err)
 	}
@@ -302,4 +297,51 @@ func newNullNode() (ast.Node, error) {
 		return nil, fmt.Errorf("create null node: unexpected AST shape")
 	}
 	return file.Docs[0].Body, nil
+}
+
+func parseYAML(src []byte) (*ast.File, error) {
+	return parser.ParseBytes(normalizeYAMLInput(src), 0)
+}
+
+func normalizeYAMLInput(src []byte) []byte {
+	if bytes.HasPrefix(src, utf8BOM) {
+		src = src[len(utf8BOM):]
+	}
+	src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
+	src = bytes.ReplaceAll(src, []byte("\r"), []byte("\n"))
+	src = normalizeQuotedIncludePaths(src)
+	return src
+}
+
+func normalizeIncludePath(path string) (string, error) {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "", fmt.Errorf("include path cannot be empty")
+	}
+	if strings.ContainsAny(path, "\r\n") {
+		return "", fmt.Errorf("include path must be a single line")
+	}
+	return path, nil
+}
+
+func normalizeQuotedIncludePaths(src []byte) []byte {
+	src = includeDoubleQuotedPathPattern.ReplaceAllFunc(src, func(match []byte) []byte {
+		parts := includeDoubleQuotedPathPattern.FindSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+
+		trimmed := strings.TrimSpace(string(parts[2]))
+		return []byte(string(parts[1]) + `"` + trimmed + `"`)
+	})
+
+	return includeSingleQuotedPathPattern.ReplaceAllFunc(src, func(match []byte) []byte {
+		parts := includeSingleQuotedPathPattern.FindSubmatch(match)
+		if len(parts) != 3 {
+			return match
+		}
+
+		trimmed := strings.TrimSpace(string(parts[2]))
+		return []byte(string(parts[1]) + "'" + trimmed + "'")
+	})
 }

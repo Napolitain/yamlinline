@@ -88,6 +88,32 @@ func TestInlineYAML_Success(t *testing.T) {
 			want:  "value:\n  name: title\n",
 		},
 		{
+			name: "quoted include path trims surrounding spaces and tabs",
+			files: map[string]string{
+				"field.yaml": "name: title\n",
+			},
+			input: "value: !include \" \tfield.yaml\t \"\n",
+			want:  "value:\n  name: title\n",
+		},
+		{
+			name: "single quoted include path trims surrounding spaces tabs and comments",
+			files: map[string]string{
+				"field.yaml": "name: title\n",
+			},
+			input: "value: !include ' \tfield.yaml\t ' # trailing comment\n",
+			want:  "value:\n  name: title\n",
+		},
+		{
+			name: "include handles bom cr newlines document markers and comments",
+			files: map[string]string{
+				"child.yaml": "\ufeff---\rname: app\rcount: 2\r...\r",
+			},
+			input: "\ufeff---\rconfig: !include \" \tchild.yaml\t \" # trailing comment\r...\r",
+			want: "config:\n" +
+				"  name: app\n" +
+				"  count: 2\n",
+		},
+		{
 			name: "empty included file becomes null",
 			files: map[string]string{
 				"empty.yaml": "",
@@ -110,6 +136,22 @@ func TestInlineYAML_Success(t *testing.T) {
 				"field2.yaml": "name: profile\ntype: object\nfields:\n  - name: age\n    type: integer\n",
 			},
 			input: "fields:\n  - !include field1.yaml\n  - !include field2.yaml\n",
+			want: "fields:\n" +
+				"  - name: title\n" +
+				"    type: string\n" +
+				"  - name: profile\n" +
+				"    type: object\n" +
+				"    fields:\n" +
+				"      - name: age\n" +
+				"        type: integer\n",
+		},
+		{
+			name: "sequence items include field definitions with inline comments",
+			files: map[string]string{
+				"field1.yaml": "name: title\ntype: string\n",
+				"field2.yaml": "name: profile\ntype: object\nfields:\n  - name: age\n    type: integer\n",
+			},
+			input: "fields:\n  - !include field1.yaml # first field\n  - !include field2.yaml # second field\n",
 			want: "fields:\n" +
 				"  - name: title\n" +
 				"    type: string\n" +
@@ -331,6 +373,20 @@ func TestInlineYAML_Errors(t *testing.T) {
 			},
 		},
 		{
+			name:  "quoted include path with only whitespace",
+			input: "value: !include \" \t \"\n",
+			wantSubstrings: []string{
+				"include path cannot be empty",
+			},
+		},
+		{
+			name:  "literal include path with only whitespace",
+			input: "value: !include |\n  \t \n",
+			wantSubstrings: []string{
+				"include path cannot be empty",
+			},
+		},
+		{
 			name:  "multiline literal include path",
 			input: "value: !include |\n  first.yaml\n  second.yaml\n",
 			wantSubstrings: []string{
@@ -340,6 +396,13 @@ func TestInlineYAML_Errors(t *testing.T) {
 		{
 			name:  "invalid root yaml",
 			input: "value: [\n",
+			wantSubstrings: []string{
+				"parse YAML",
+			},
+		},
+		{
+			name:  "tab indented yaml is rejected",
+			input: "fields:\n\t- !include child.yaml\n",
 			wantSubstrings: []string{
 				"parse YAML",
 			},
