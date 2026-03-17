@@ -27,6 +27,9 @@ func InlineYAML(src []byte) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("parse YAML: %w", err)
 	}
+	if !containsIncludeFile(file) {
+		return append([]byte(nil), stripUTF8BOM(src)...), nil
+	}
 
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -300,17 +303,52 @@ func newNullNode() (ast.Node, error) {
 }
 
 func parseYAML(src []byte) (*ast.File, error) {
-	return parser.ParseBytes(normalizeYAMLInput(src), 0)
+	return parser.ParseBytes(stripUTF8BOM(normalizeQuotedIncludePaths(src)), 0)
 }
 
-func normalizeYAMLInput(src []byte) []byte {
-	if bytes.HasPrefix(src, utf8BOM) {
-		src = src[len(utf8BOM):]
+func containsIncludeFile(file *ast.File) bool {
+	if file == nil {
+		return false
 	}
-	src = bytes.ReplaceAll(src, []byte("\r\n"), []byte("\n"))
-	src = bytes.ReplaceAll(src, []byte("\r"), []byte("\n"))
-	src = normalizeQuotedIncludePaths(src)
-	return src
+
+	for _, doc := range file.Docs {
+		if doc != nil && containsIncludeNode(doc.Body) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsIncludeNode(node ast.Node) bool {
+	if node == nil {
+		return false
+	}
+
+	switch n := node.(type) {
+	case *ast.DocumentNode:
+		return containsIncludeNode(n.Body)
+	case *ast.MappingNode:
+		for _, value := range n.Values {
+			if value != nil && containsIncludeNode(value.Value) {
+				return true
+			}
+		}
+	case *ast.SequenceNode:
+		for _, value := range n.Values {
+			if containsIncludeNode(value) {
+				return true
+			}
+		}
+	case *ast.TagNode:
+		if n.Start != nil && n.Start.Value == includeTag {
+			return true
+		}
+		return containsIncludeNode(n.Value)
+	case *ast.AnchorNode:
+		return containsIncludeNode(n.Value)
+	}
+
+	return false
 }
 
 func normalizeIncludePath(path string) (string, error) {
@@ -344,4 +382,11 @@ func normalizeQuotedIncludePaths(src []byte) []byte {
 		trimmed := strings.TrimSpace(string(parts[2]))
 		return []byte(string(parts[1]) + "'" + trimmed + "'")
 	})
+}
+
+func stripUTF8BOM(src []byte) []byte {
+	if bytes.HasPrefix(src, utf8BOM) {
+		return src[len(utf8BOM):]
+	}
+	return src
 }
