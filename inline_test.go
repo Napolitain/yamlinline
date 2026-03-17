@@ -26,12 +26,41 @@ func TestInlineYAML_Success(t *testing.T) {
 			want:  "value: hello\n",
 		},
 		{
+			name: "scalar include without trailing newline",
+			files: map[string]string{
+				"scalar.yaml": "hello",
+			},
+			input: "value: !include scalar.yaml\n",
+			want:  "value: hello\n",
+		},
+		{
+			name: "top level input without trailing newline",
+			files: map[string]string{
+				"scalar.yaml": "hello",
+			},
+			input: "value: !include scalar.yaml",
+			want:  "value: hello\n",
+		},
+		{
 			name: "mapping include",
 			files: map[string]string{
 				"config.yaml": "name: app\ncount: 2\n",
 			},
 			input: "config: !include config.yaml\n",
 			want:  "config:\n  name: app\n  count: 2\n",
+		},
+		{
+			name: "mapping include with CRLF file endings",
+			files: map[string]string{
+				"config.yaml": "name: app\r\ncount: 2\r\nfields:\r\n  - name: age\r\n    type: integer",
+			},
+			input: "config: !include config.yaml\n",
+			want: "config:\n" +
+				"  name: app\n" +
+				"  count: 2\n" +
+				"  fields:\n" +
+				"    - name: age\n" +
+				"      type: integer\n",
 		},
 		{
 			name: "sequence include",
@@ -49,6 +78,30 @@ func TestInlineYAML_Success(t *testing.T) {
 			},
 			input: "config: !include configs/child.yaml\n",
 			want:  "config:\n  leaf: 7\n",
+		},
+		{
+			name: "literal block include path",
+			files: map[string]string{
+				"field.yaml": "name: title\n",
+			},
+			input: "value: !include |\n  field.yaml\n",
+			want:  "value:\n  name: title\n",
+		},
+		{
+			name: "empty included file becomes null",
+			files: map[string]string{
+				"empty.yaml": "",
+			},
+			input: "value: !include empty.yaml\n",
+			want:  "value: null\n",
+		},
+		{
+			name: "whitespace only included file becomes null",
+			files: map[string]string{
+				"empty.yaml": "   \n\n",
+			},
+			input: "value: !include empty.yaml\n",
+			want:  "value: null\n",
 		},
 		{
 			name: "sequence items include field definitions",
@@ -270,6 +323,27 @@ func TestInlineYAML_Errors(t *testing.T) {
 				"include path must be a scalar value",
 			},
 		},
+		{
+			name:  "empty quoted include path",
+			input: "value: !include ''\n",
+			wantSubstrings: []string{
+				"include path cannot be empty",
+			},
+		},
+		{
+			name:  "multiline literal include path",
+			input: "value: !include |\n  first.yaml\n  second.yaml\n",
+			wantSubstrings: []string{
+				"include path must be a single line",
+			},
+		},
+		{
+			name:  "invalid root yaml",
+			input: "value: [\n",
+			wantSubstrings: []string{
+				"parse YAML",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -289,6 +363,70 @@ func TestInlineYAML_Errors(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestInlineYAML_AbsoluteIncludePath(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"scalar.yaml": "hello",
+	})
+	chdir(t, dir)
+
+	path := filepath.Join(dir, "scalar.yaml")
+	got, err := InlineYAML([]byte("value: !include " + path + "\n"))
+	if err != nil {
+		t.Fatalf("InlineYAML returned error: %v", err)
+	}
+
+	assertYAMLEqual(t, got, "value: hello\n")
+}
+
+func TestInlineYAML_PreservesCustomTagsAndAnchors(t *testing.T) {
+	dir := t.TempDir()
+	writeFiles(t, dir, map[string]string{
+		"child.yaml": "7\n",
+	})
+	chdir(t, dir)
+
+	input := strings.Join([]string{
+		"tagged: !custom",
+		"  child: !include child.yaml",
+		"defaults: &defaults",
+		"  child: !include child.yaml",
+		"copy: *defaults",
+		"",
+	}, "\n")
+
+	got, err := InlineYAML([]byte(input))
+	if err != nil {
+		t.Fatalf("InlineYAML returned error: %v", err)
+	}
+	if strings.Contains(string(got), "!include") {
+		t.Fatalf("InlineYAML left include tags in output:\n%s", got)
+	}
+	if !strings.Contains(string(got), "!custom") {
+		t.Fatalf("InlineYAML did not preserve custom tag:\n%s", got)
+	}
+	if !strings.Contains(string(got), "&defaults") {
+		t.Fatalf("InlineYAML did not preserve anchor:\n%s", got)
+	}
+
+	assertYAMLEqual(t, got, "tagged:\n  child: 7\ndefaults:\n  child: 7\ncopy:\n  child: 7\n")
+}
+
+func TestInlineYAML_ErrorUsesAbsolutePathOutsideWorkingDirectory(t *testing.T) {
+	cwd := t.TempDir()
+	otherDir := t.TempDir()
+	chdir(t, cwd)
+
+	missingPath := filepath.Join(otherDir, "missing.yaml")
+	_, err := InlineYAML([]byte("value: !include " + missingPath + "\n"))
+	if err == nil {
+		t.Fatal("InlineYAML returned nil error")
+	}
+	if !strings.Contains(err.Error(), missingPath) {
+		t.Fatalf("expected error to contain absolute path %q, got %q", missingPath, err)
 	}
 }
 
