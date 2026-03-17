@@ -50,6 +50,147 @@ func TestInlineYAML_Success(t *testing.T) {
 			input: "config: !include configs/child.yaml\n",
 			want:  "config:\n  leaf: 7\n",
 		},
+		{
+			name: "sequence items include field definitions",
+			files: map[string]string{
+				"field1.yaml": "name: title\ntype: string\n",
+				"field2.yaml": "name: profile\ntype: object\nfields:\n  - name: age\n    type: integer\n",
+			},
+			input: "fields:\n  - !include field1.yaml\n  - !include field2.yaml\n",
+			want: "fields:\n" +
+				"  - name: title\n" +
+				"    type: string\n" +
+				"  - name: profile\n" +
+				"    type: object\n" +
+				"    fields:\n" +
+				"      - name: age\n" +
+				"        type: integer\n",
+		},
+		{
+			name: "sequence items include field definitions with trailing whitespace",
+			files: map[string]string{
+				"field1.yaml": "name: title   \n" +
+					"type: string   \n" +
+					"   \n",
+				"field2.yaml": "name: profile   \n" +
+					"type: object   \n" +
+					"fields:   \n" +
+					"  - name: age   \n" +
+					"    type: integer   \n" +
+					"  - name: active   \n" +
+					"    type: boolean   \n" +
+					"\n",
+			},
+			input: "fields:\n  - !include field1.yaml\n  - !include field2.yaml\n",
+			want: "fields:\n" +
+				"  - name: title\n" +
+				"    type: string\n" +
+				"  - name: profile\n" +
+				"    type: object\n" +
+				"    fields:\n" +
+				"      - name: age\n" +
+				"        type: integer\n" +
+				"      - name: active\n" +
+				"        type: boolean\n",
+		},
+		{
+			name: "nested object field includes inside fields list",
+			files: map[string]string{
+				"field1.yaml":                "name: profile\ntype: object\nfields:\n  - !include nested/first_name.yaml\n  - !include nested/address.yaml\n",
+				"nested/first_name.yaml":     "name: firstName\ntype: string\n",
+				"nested/address.yaml":        "name: address\ntype: object\nfields:\n  - !include nested/address_street.yaml\n  - !include nested/address_city.yaml\n",
+				"nested/address_street.yaml": "name: street\ntype: string\n",
+				"nested/address_city.yaml":   "name: city\ntype: string\n",
+			},
+			input: "fields:\n  - !include field1.yaml\n",
+			want: "fields:\n" +
+				"  - name: profile\n" +
+				"    type: object\n" +
+				"    fields:\n" +
+				"      - name: firstName\n" +
+				"        type: string\n" +
+				"      - name: address\n" +
+				"        type: object\n" +
+				"        fields:\n" +
+				"          - name: street\n" +
+				"            type: string\n" +
+				"          - name: city\n" +
+				"            type: string\n",
+		},
+		{
+			name: "nested list item fields include deeper definitions",
+			files: map[string]string{
+				"field1.yaml":                     "name: addresses\ntype: list\nitems:\n  type: object\n  fields:\n    - !include nested/street.yaml\n    - !include nested/metadata.yaml\n",
+				"nested/street.yaml":              "name: street\ntype: string\n",
+				"nested/metadata.yaml":            "name: metadata\ntype: object\nfields:\n  - !include nested/metadata_created_at.yaml\n  - !include nested/metadata_tags.yaml\n",
+				"nested/metadata_created_at.yaml": "name: createdAt\ntype: string\n",
+				"nested/metadata_tags.yaml":       "name: tags\ntype: list\nitems:\n  type: string\n",
+			},
+			input: "fields:\n  - !include field1.yaml\n",
+			want: "fields:\n" +
+				"  - name: addresses\n" +
+				"    type: list\n" +
+				"    items:\n" +
+				"      type: object\n" +
+				"      fields:\n" +
+				"        - name: street\n" +
+				"          type: string\n" +
+				"        - name: metadata\n" +
+				"          type: object\n" +
+				"          fields:\n" +
+				"            - name: createdAt\n" +
+				"              type: string\n" +
+				"            - name: tags\n" +
+				"              type: list\n" +
+				"              items:\n" +
+				"                type: string\n",
+		},
+		{
+			name: "nested list item fields include deeper definitions with trailing whitespace",
+			files: map[string]string{
+				"field1.yaml": "name: addresses   \n" +
+					"type: list   \n" +
+					"items:   \n" +
+					"  type: object   \n" +
+					"  fields:   \n" +
+					"    - !include nested/street.yaml   \n" +
+					"    - !include nested/metadata.yaml   \n" +
+					"   \n",
+				"nested/street.yaml": "name: street   \n" +
+					"type: string   \n",
+				"nested/metadata.yaml": "name: metadata   \n" +
+					"type: object   \n" +
+					"fields:   \n" +
+					"  - !include nested/metadata_created_at.yaml   \n" +
+					"  - !include nested/metadata_tags.yaml   \n" +
+					"\n",
+				"nested/metadata_created_at.yaml": "name: createdAt   \n" +
+					"type: string   \n",
+				"nested/metadata_tags.yaml": "name: tags   \n" +
+					"type: list   \n" +
+					"items:   \n" +
+					"  type: string   \n" +
+					"   \n",
+			},
+			input: "fields:\n  - !include field1.yaml\n",
+			want: "fields:\n" +
+				"  - name: addresses\n" +
+				"    type: list\n" +
+				"    items:\n" +
+				"      type: object\n" +
+				"      fields:\n" +
+				"        - name: street\n" +
+				"          type: string\n" +
+				"        - name: metadata\n" +
+				"          type: object\n" +
+				"          fields:\n" +
+				"            - name: createdAt\n" +
+				"              type: string\n" +
+				"            - name: tags\n" +
+				"              type: list\n" +
+				"              items:\n" +
+				"                type: string\n",
+		},
 	}
 
 	for _, tt := range tests {
